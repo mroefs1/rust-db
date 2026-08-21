@@ -1,4 +1,4 @@
-use crate::constants::PAGE_SIZE;
+use crate::{constants::PAGE_SIZE, page_type::PageType};
 
 pub const HEADER_SIZE: usize = 24;
 
@@ -11,7 +11,7 @@ const LSN_OFFSET: usize = 16; //Bytes 16-24
 
 pub struct PageHeader {
     pub page_id: u64,             //8bytes
-    pub page_type: u16,           //2bytes
+    pub page_type: PageType,      //2bytes
     pub slot_array_offset: u16,   //2bytes
     pub record_data_offset: u16,  //2bytes
     pub dead_bytes_counter: u16,  //2bytes
@@ -23,9 +23,10 @@ impl PageHeader {
     pub fn from_bytes(src: &[u8; PAGE_SIZE]) -> Self {
         Self {
             page_id: u64::from_be_bytes(src[PAGE_ID_OFFSET..PAGE_TYPE_OFFSET].try_into().unwrap()),
-            page_type: u16::from_be_bytes(
+            page_type: PageType::try_from(u16::from_be_bytes(
                 src[PAGE_TYPE_OFFSET..SLOT_ARR_OFFSET].try_into().unwrap(),
-            ),
+            ))
+            .expect("invalid page type discriminant"),
             slot_array_offset: u16::from_be_bytes(
                 src[SLOT_ARR_OFFSET..REC_DATA_OFFSET].try_into().unwrap(),
             ),
@@ -44,7 +45,8 @@ impl PageHeader {
     //Serialize the header values back into the start of a raw byte buffer
     pub fn to_bytes(&self, dest: &mut [u8; PAGE_SIZE]) {
         dest[PAGE_ID_OFFSET..PAGE_TYPE_OFFSET].copy_from_slice(&self.page_id.to_be_bytes());
-        dest[PAGE_TYPE_OFFSET..SLOT_ARR_OFFSET].copy_from_slice(&self.page_type.to_be_bytes());
+        dest[PAGE_TYPE_OFFSET..SLOT_ARR_OFFSET]
+            .copy_from_slice(&(self.page_type as u16).to_be_bytes());
         dest[SLOT_ARR_OFFSET..REC_DATA_OFFSET]
             .copy_from_slice(&self.slot_array_offset.to_be_bytes());
         dest[REC_DATA_OFFSET..DEAD_BYTES_OFFSET]

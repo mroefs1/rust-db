@@ -6,7 +6,7 @@ pub struct FrameMetadata {
     pub data: Box<[u8; PAGE_SIZE]>,
     pub pin_count: u32, //pinned or not? important for future multithreading
     pub referenced: bool,
-    pub is_dirty: bool, //does this need to be written to disk?
+    pub is_dirty: bool, //if true needs to be written to disk
 }
 
 pub struct BufferPool<'a> {
