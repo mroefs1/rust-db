@@ -1,4 +1,4 @@
-use crate::{constants::PAGE_SIZE, page_type::PageType};
+use crate::{constants::PAGE_SIZE, enums::page_type::PageType, errors::page_error::PageError};
 
 pub const HEADER_SIZE: usize = 24;
 
@@ -20,13 +20,12 @@ pub struct PageHeader {
 
 impl PageHeader {
     //read and parse the header directly from the start of a raw bytes buffer that we'll get from the buffer pool
-    pub fn from_bytes(src: &[u8; PAGE_SIZE]) -> Self {
-        Self {
+    pub fn from_bytes(src: &[u8; PAGE_SIZE]) -> Result<Self, PageError> {
+        Ok(Self {
             page_id: u64::from_be_bytes(src[PAGE_ID_OFFSET..PAGE_TYPE_OFFSET].try_into().unwrap()),
             page_type: PageType::try_from(u16::from_be_bytes(
                 src[PAGE_TYPE_OFFSET..SLOT_ARR_OFFSET].try_into().unwrap(),
-            ))
-            .expect("invalid page type discriminant"),
+            ))?,
             slot_array_offset: u16::from_be_bytes(
                 src[SLOT_ARR_OFFSET..REC_DATA_OFFSET].try_into().unwrap(),
             ),
@@ -39,7 +38,7 @@ impl PageHeader {
             log_sequence_number: u64::from_be_bytes(
                 src[LSN_OFFSET..HEADER_SIZE].try_into().unwrap(),
             ),
-        }
+        })
     }
 
     //Serialize the header values back into the start of a raw byte buffer
