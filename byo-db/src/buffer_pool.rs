@@ -12,10 +12,10 @@ and if the evicted frame is dirty, that's the moment it calls Pager::write_page 
 use crate::pager::Pager;
 use crate::{constants::PAGE_SIZE, errors::page_error::PageError};
 use std::collections::{HashMap, VecDeque};
+use std::ops::Index;
 
 pub struct FrameMetadata {
     pub data: Box<[u8; PAGE_SIZE]>,
-    pub pin_count: u32,
     pub referenced: bool,
     pub is_dirty: bool, //if true needs to be written to disk
 }
@@ -54,14 +54,38 @@ impl BufferPool {
     */
 
     //Fetches a page from the cache (or loads it from disk via the pager if it's a cache miss),
-    //increments its pin count so the Clock algorithm doesn't evict it
+    //if in cache queue and referenced pop from current location and push_back
+    //if not flip ref bit
+    //because this guarantees that left most ele
     pub fn pin_page(&mut self, page_id: u64) -> Result<FrameMetadata, PageError> {
-        Ok(FrameMetadata {
+        //if cache hit
+        if let Some(mut frame) = self.frames.remove(&page_id) {
+            //if in history promote
+            if self.history_queue.contains(&page_id) {
+                self.promote(page_id);
+            } 
+            //if in cache instead move to the back so it doesn't get chopped off
+            if self.cache_queue.contains(&page_id) {
+                frame.referenced = true;
+                self.cache_queue.remove(page_id as usize);
+                self.cache_queue.push_back(page_id);
+            }
+            //put back in hashmap and return frame
+            self.frames.insert(page_id, frame);
+            Ok(frame);
+        }
+        //if no cache hit -> go to Pager and get from disk
+        let self.pager.read_page(&page_id);
+
+        Ok((FrameMetadata {
             data: (),
-            pin_count: (),
             referenced: (),
             is_dirty: (),
-        })
+        }))
+    }
+
+    fn promote(&self, page_id: u64) {
+        //do the promoting
     }
 
     pub fn unpin_page() {}
@@ -71,7 +95,6 @@ impl BufferPool {
     pub fn new_page(&mut self, page_id: u64) -> Result<FrameMetadata, PageError> {
         Ok(FrameMetadata {
             data: (),
-            pin_count: (),
             referenced: (),
             is_dirty: (),
         })
@@ -100,17 +123,30 @@ impl BufferPool {
             b) if ref == false, cold page -> evict. If evict page is dirty -> flush it
     */
     fn eviction_sweep(&mut self) {
+        let mut counter = 0;
         if !self.history_queue.is_empty() {
             self.history_queue.pop_front();
             return;
         }
         while let Some(id) = self.cache_queue.pop_front() {
+            //been through whole cache queue pop from front
+            if counter == self.pool_capacity {
+                self.frames.remove(&id);
+                self.cache_queue.pop_front();
+            }
             if let Some(mut candidate_frame) = self.frames.remove(&id) {
                 if candidate_frame.referenced {
                     candidate_frame.referenced = false;
                     self.cache_queue.push_back(id);
                     self.frames.insert(id, candidate_frame);
+                    counter += 1;
+                    continue;
                 }
+                if candidate_frame.is_dirty {
+                    self.flush_page(id);
+                }
+                self.frames.remove(&id);
+                return;
             }
         }
     }

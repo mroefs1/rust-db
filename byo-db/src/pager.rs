@@ -6,6 +6,8 @@ It just does read_page(id) / write_page(id, bytes) / allocate_page() / free_page
 with fsync per your Module 2 decision.
 */
 
+use crate::{errors::page_error::PageError, page::Page};
+
 mod freelist;
 
 pub struct Pager {
@@ -16,5 +18,8 @@ pub struct Pager {
 impl Pager {
     pub fn new(id: u8) -> Self {
         Self { id: id }
+    }
+    pub fn read_page(id: u64) -> Result<Page, PageError> {
+        //Todo
     }
 }
