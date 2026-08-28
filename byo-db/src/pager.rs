@@ -20,6 +20,6 @@ impl Pager {
         Self { id: id }
     }
     pub fn read_page(id: u64) -> Result<Page, PageError> {
-        //Todo
+        todo!();
     }
 }

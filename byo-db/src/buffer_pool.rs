@@ -9,35 +9,34 @@ When it needs to evict to make room, it runs the sweep logic (history-first, the
 and if the evicted frame is dirty, that's the moment it calls Pager::write_page to flush it out before dropping it from memory.
 */
 
+use crate::page;
 use crate::pager::Pager;
 use crate::{constants::PAGE_SIZE, errors::page_error::PageError};
 use std::collections::{HashMap, VecDeque};
-use std::ops::Index;
 
 pub struct FrameMetadata {
     pub data: Box<[u8; PAGE_SIZE]>,
-    pub referenced: bool,
-    pub is_dirty: bool, //if true needs to be written to disk
+    pub referenced: bool, //if true don't evict
+    pub is_dirty: bool,   //if true needs to be written to disk
 }
 
 pub struct BufferPool {
     //pager lifetime
     pager: Pager,
-
-    //registry hashmap: map page id to raw data/eviction metadata
+    ///registry hashmap: map page id to raw data/eviction metadata
     pub frames: HashMap<u64, FrameMetadata>,
-
     //History queue: Pass in capacity in constructor
     pub history_queue: VecDeque<u64>,
-
     //Cache Queue: Pass in capacity in constructor
     pub cache_queue: VecDeque<u64>,
-
     pub pool_capacity: usize,
     pub max_history_capacity: usize,
 }
 
 impl BufferPool {
+    ///Create the BufferPool. Should only be called once
+    ///Constructs frames hashmap, history_queue, cache_queue
+    ///Creates the pager that it will use via Pager::new()
     pub fn new(pool_cap: usize, history_cap: usize) -> Self {
         Self {
             pager: Pager::new(1), //id is placeholder to avoid errors
@@ -50,54 +49,55 @@ impl BufferPool {
     }
     /*
         BufferPool Methods the Engine can actually call (for now)
-        pin_page, unpin_page, new_page, flush_page, flush_all_pages
+        retreive_page, new_page, flush_page, flush_all_pages
     */
 
-    //Fetches a page from the cache (or loads it from disk via the pager if it's a cache miss),
-    //if in cache queue and referenced pop from current location and push_back
-    //if not flip ref bit
-    //because this guarantees that left most ele
-    pub fn pin_page(&mut self, page_id: u64) -> Result<FrameMetadata, PageError> {
+    ///Fetches a page from the cache (or loads it from disk via the pager if it's a cache miss),
+    ///If in history queue, promote to cache queue.
+    ///If in cache queue, set referenced to true and place on back of queue,
+    ///because this guarantees that left most ele is the least recently used.
+    ///Returns page's data from the FrameMetadata container.
+    pub fn retrieve_page(&mut self, page_id: u64) -> Result<Box<[u8; PAGE_SIZE]>, PageError> {
         //if cache hit
         if let Some(mut frame) = self.frames.remove(&page_id) {
             //if in history promote
             if self.history_queue.contains(&page_id) {
                 self.promote(page_id);
-            } 
-            //if in cache instead move to the back so it doesn't get chopped off
+            }
+            //if in cache instead move to the back so it doesn't get evicted
             if self.cache_queue.contains(&page_id) {
                 frame.referenced = true;
                 self.cache_queue.remove(page_id as usize);
                 self.cache_queue.push_back(page_id);
             }
-            //put back in hashmap and return frame
+            //put back in hashmap and return frame data
             self.frames.insert(page_id, frame);
-            Ok(frame);
+            Ok((self.frames.get(&page_id).data).clone())
         }
         //if no cache hit -> go to Pager and get from disk
-        let self.pager.read_page(&page_id);
-
-        Ok((FrameMetadata {
-            data: (),
-            referenced: (),
-            is_dirty: (),
-        }))
+        //then insert into history queue
+        let loaded_page = self.pager.read_page(&page_id);
+        if self.history_queue.len() == self.history_queue.capacity() {
+            self.eviction_sweep();
+        }
+        self.history_queue.push_back(page_id);
+        Ok(loaded_page.data)
     }
 
-    fn promote(&self, page_id: u64) {
-        //do the promoting
+    ///For promotion of a page from history queue to cache queue.
+    ///If the cache queue is full, calls cache_eviction to make a space
+    fn promote(&mut self, page_id: u64) {
+        if self.cache_queue.len() == self.cache_queue.capacity() {
+            self.cache_eviction();
+        }
+        self.history_queue.remove(page_id as usize);
+        self.cache_queue.push_back(page_id);
     }
 
-    pub fn unpin_page() {}
-
-    //Allocates a brand-new page on disk via the pager, loads it into a buffer frame,
-    //pins it, and returns both the new page id and frame to the engine
+    ///Allocates a brand-new page on disk via the pager, loads it into a buffer frame,
+    ///adds to the history queue, and returns both the new page id and frame to the engine
     pub fn new_page(&mut self, page_id: u64) -> Result<FrameMetadata, PageError> {
-        Ok(FrameMetadata {
-            data: (),
-            referenced: (),
-            is_dirty: (),
-        })
+        todo!();
     }
 
     //call on the pager to flush a specific page id
@@ -122,12 +122,28 @@ impl BufferPool {
                 I) repeat i
             b) if ref == false, cold page -> evict. If evict page is dirty -> flush it
     */
+
+    ///If history queue isn't empty, remove an id from it.
+    ///Remove the associated FrameMetadata from frames, and write to disk if it's dirty.
+    /// If history queue is empty, call cache_eviction    
     fn eviction_sweep(&mut self) {
-        let mut counter = 0;
         if !self.history_queue.is_empty() {
-            self.history_queue.pop_front();
+            if let Some(history_id) = self.history_queue.pop_front() {
+                if let Some(candidate_frame) = self.frames.remove(&history_id) {
+                    if candidate_frame.is_dirty {
+                        self.flush_page(history_id);
+                    }
+                }
+            }
             return;
         }
+        self.cache_eviction();
+    }
+
+    ///If cache is full and needs an eviction for a promoted member, call this directly
+    ///For inserting a new page use eviction_sweep to process history queue evictions.
+    fn cache_eviction(&mut self) {
+        let mut counter = 0;
         while let Some(id) = self.cache_queue.pop_front() {
             //been through whole cache queue pop from front
             if counter == self.pool_capacity {
